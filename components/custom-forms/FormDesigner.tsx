@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   ChevronLeft, Monitor, Smartphone, GripVertical, Type, Hash, 
@@ -20,6 +21,14 @@ interface FormDesignerProps {
   onSaveTemplate?: (data: { title: string, description: string, fields: TemplateField[] }) => void;
   templates?: ComponentTemplate[]; // Shared templates data
 }
+
+// --- Validation Constants ---
+const VALIDATION_RULES = {
+  phone: { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号码' },
+  email: { pattern: /^\w+([-+.]\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*$/, message: '请输入正确的邮箱地址' },
+  idcard: { pattern: /(^\d{15}$)|(^\d{18}$)|(^\d{17}(\d|X|x)$)/, message: '请输入正确的身份证号' },
+  landline: { pattern: /^0\d{2,3}-\d{7,8}$/, message: '请输入正确的座机号码' },
+};
 
 // --- Component Definitions ---
 type ComponentType = 'input' | 'textarea' | 'number' | 'money' | 'radio' | 'checkbox' | 'select' | 'date' | 'upload' | 'signature' | 'subform';
@@ -57,6 +66,13 @@ interface FormField {
     // Sub-form Props
     columns?: SubFieldColumn[]; 
     maxRows?: number;
+
+    // Built-in Validation Props
+    validationType?: string; // 'phone' | 'email' | 'idcard' | 'landline'
+
+    // Custom Regex Validation Props
+    regexPattern?: string;
+    regexMessage?: string;
   };
 }
 
@@ -289,6 +305,51 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
     setShowPreview(true);
   };
 
+  const handlePreviewSubmit = () => {
+    // Basic DOM-based validation for the preview mode
+    // We only validate the fields currently visible or accessible in the preview
+    // Note: Since this is a lightweight preview, we access the input values directly from DOM
+    
+    // Get fields on the current page if pagination is on
+    const currentFields = fields.filter(f => formConfig.pagination ? f.pageId === previewPage : true);
+
+    for (const field of currentFields) {
+      const element = document.getElementById(field.id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      if (element) {
+         const value = element.value;
+         
+         // 1. Required Check
+         if (field.props.required && !value.trim()) {
+            alert(`${field.label} 是必填项`);
+            return;
+         }
+
+         // 2. Built-in Regex Check (New Feature)
+         if (field.type === 'input' && field.props.validationType && value) {
+            const rule = VALIDATION_RULES[field.props.validationType as keyof typeof VALIDATION_RULES];
+            if (rule && !rule.pattern.test(value)) {
+               alert(rule.message);
+               return;
+            }
+         }
+
+         // 3. Custom Regex Check (Only for input/number as requested)
+         if ((field.type === 'input' || field.type === 'number') && field.props.regexPattern && value) {
+            try {
+               const regex = new RegExp(field.props.regexPattern);
+               if (!regex.test(value)) {
+                  alert(field.props.regexMessage || `${field.label} 格式不正确`);
+                  return;
+               }
+            } catch (e) {
+               console.error('Invalid regex', e);
+            }
+         }
+      }
+    }
+    setPreviewSubmitted(true);
+  };
+
   const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -452,6 +513,7 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
 
   const renderField = (field: FormField, isPreview = false) => {
     const isSelected = selectedFieldId === field.id && !isPreview;
+    // Allow pointer events for preview interactions on Select/Date/Upload now
     const containerEvents = (isPreview || field.type === 'subform') ? '' : 'pointer-events-none';
 
     return (
@@ -478,7 +540,7 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
         <div className={containerEvents}>
           {field.type === 'input' && (
             <div className="relative">
-              <input type="text" className={inputBaseClass} placeholder={field.props.placeholder} disabled={!isPreview} />
+              <input id={field.id} type="text" className={inputBaseClass} placeholder={field.props.placeholder} disabled={!isPreview} />
               {field.props.maxLength && (
                 <span className="absolute right-2 bottom-2 text-[10px] text-gray-300">0/{field.props.maxLength}</span>
               )}
@@ -487,7 +549,7 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
           
           {field.type === 'textarea' && (
             <div className="relative">
-              <textarea className={inputBaseClass} rows={field.props.rows || 3} placeholder={field.props.placeholder} disabled={!isPreview} />
+              <textarea id={field.id} className={inputBaseClass} rows={field.props.rows || 3} placeholder={field.props.placeholder} disabled={!isPreview} />
               {field.props.maxLength && (
                 <span className="absolute right-2 bottom-2 text-[10px] text-gray-300">0/{field.props.maxLength}</span>
               )}
@@ -496,7 +558,7 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
           
           {field.type === 'number' && (
             <div className="relative">
-               <input type="number" className={inputBaseClass} placeholder={field.props.placeholder} disabled={!isPreview} />
+               <input id={field.id} type="number" className={inputBaseClass} placeholder={field.props.placeholder} disabled={!isPreview} />
                {field.props.unit && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">{field.props.unit}</span>}
             </div>
           )}
@@ -520,24 +582,52 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
           )}
 
           {field.type === 'select' && (
-            <div className={`${inputBaseClass} bg-gray-50 flex items-center justify-between text-gray-500`}>
-              <span>{field.props.placeholder}</span>
-              <ChevronDown size={16} />
-            </div>
+            isPreview ? (
+              <select id={field.id} className={inputBaseClass} defaultValue="">
+                <option value="" disabled>{field.props.placeholder}</option>
+                {field.props.options?.map((opt, i) => (
+                  <option key={i} value={opt}>{opt}</option>
+                ))}
+              </select>
+            ) : (
+              <div className={`${inputBaseClass} bg-gray-50 flex items-center justify-between text-gray-500`}>
+                <span>{field.props.placeholder}</span>
+                <ChevronDown size={16} />
+              </div>
+            )
           )}
 
           {field.type === 'date' && (
-            <div className={`${inputBaseClass} bg-gray-50 flex items-center justify-between text-gray-500`}>
-              <span>{field.props.dateFormat === 'datetime' ? 'YYYY-MM-DD HH:mm' : 'YYYY-MM-DD'}</span>
-              <div className="flex items-center gap-1">
-                 <Calendar size={16} />
-                 {field.props.dateFormat === 'datetime' && <Clock size={16} />}
+            isPreview ? (
+              <div className="relative">
+                   <input 
+                     id={field.id} 
+                     type={field.props.dateFormat === 'datetime' ? 'datetime-local' : 'date'} 
+                     className={`${inputBaseClass} text-gray-600`}
+                   />
               </div>
-            </div>
+            ) : (
+              <div className={`${inputBaseClass} bg-gray-50 flex items-center justify-between text-gray-500`}>
+                <span>{field.props.dateFormat === 'datetime' ? 'YYYY-MM-DD HH:mm' : 'YYYY-MM-DD'}</span>
+                <div className="flex items-center gap-1">
+                   <Calendar size={16} />
+                   {field.props.dateFormat === 'datetime' && <Clock size={16} />}
+                </div>
+              </div>
+            )
           )}
 
           {field.type === 'upload' && (
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 bg-gray-50 relative">
+               {/* Hidden file input for Preview interaction */}
+               {isPreview && (
+                 <input 
+                   id={field.id}
+                   type="file" 
+                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
+                   multiple={(field.props.maxCount || 1) > 1}
+                 />
+               )}
                <div className="flex flex-col items-center justify-center text-gray-400 text-xs mb-3">
                   <UploadCloud size={32} className="mb-2 text-gray-300" />
                   <p className="font-medium text-gray-500">{field.props.placeholder}</p>
@@ -1064,6 +1154,50 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
                            <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${selectedField.props.required ? 'left-6' : 'left-1'}`}></div>
                          </button>
                     </div>
+
+                    {/* Built-in Validation for Input */}
+                    {selectedField.type === 'input' && (
+                       <div className="mt-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                          <label className="block text-xs text-gray-500 mb-1">文本格式校验</label>
+                          <select 
+                            value={selectedField.props.validationType || ''}
+                            onChange={(e) => updateSelectedField('validationType', e.target.value)}
+                            className={inputBaseClass}
+                          >
+                             <option value="">无</option>
+                             <option value="phone">手机号</option>
+                             <option value="email">邮箱</option>
+                             <option value="idcard">身份证号</option>
+                             <option value="landline">座机号码</option>
+                          </select>
+                       </div>
+                    )}
+
+                    {/* Regex Validation (Custom/Advanced) */}
+                    {(selectedField.type === 'input' || selectedField.type === 'number') && (
+                       <div className="mt-3 space-y-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">高级正则 (Regex)</label>
+                            <input 
+                              type="text" 
+                              placeholder="如：^1[3-9]\d{9}$" 
+                              value={selectedField.props.regexPattern || ''}
+                              onChange={(e) => updateSelectedField('regexPattern', e.target.value)}
+                              className={inputBaseClass} 
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">错误提示</label>
+                            <input 
+                              type="text" 
+                              placeholder="如：请输入正确的手机号" 
+                              value={selectedField.props.regexMessage || ''}
+                              onChange={(e) => updateSelectedField('regexMessage', e.target.value)}
+                              className={inputBaseClass} 
+                            />
+                          </div>
+                       </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -1281,7 +1415,7 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
                                          </button>
                                        ) : (
                                          <button 
-                                            onClick={() => setPreviewSubmitted(true)}
+                                            onClick={handlePreviewSubmit}
                                             className="flex-1 bg-primary-600 text-white py-2.5 rounded-lg font-medium shadow-sm hover:bg-primary-700"
                                          >
                                             提交
@@ -1290,7 +1424,7 @@ const FormDesigner: React.FC<FormDesignerProps> = ({
                                     </div>
                                   ) : (
                                     <button 
-                                      onClick={() => setPreviewSubmitted(true)}
+                                      onClick={handlePreviewSubmit}
                                       className="w-full bg-primary-600 text-white py-2.5 rounded-lg font-medium shadow-sm hover:bg-primary-700"
                                     >
                                       提交
